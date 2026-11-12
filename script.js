@@ -20,6 +20,16 @@
     nav.classList.toggle('is-scrolled', open || window.scrollY > 24);
   };
   toggle.addEventListener('click', () => setMenu(menu.hidden));
+  // Services / More sub-links: chevron opens one group at a time
+  const mmToggles = [...menu.querySelectorAll('.mm-toggle')];
+  mmToggles.forEach((btn) => btn.addEventListener('click', () => {
+    const open = btn.getAttribute('aria-expanded') !== 'true';
+    mmToggles.forEach((b) => {
+      const on = b === btn && open;
+      b.setAttribute('aria-expanded', String(on));
+      document.getElementById(b.getAttribute('aria-controls')).hidden = !on;
+    });
+  }));
   menu.addEventListener('click', (e) => { if (e.target.closest('a')) setMenu(false); });
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && !menu.hidden) { setMenu(false); toggle.focus(); }
@@ -40,6 +50,22 @@
     reveals.forEach((el) => el.classList.add('is-visible'));
   }
 
+  const showNow = (el) => {   // reveal instantly (no slide), so scroll maths use its final position
+    [el, el.closest('.reveal, .journey')].forEach((r) => {
+      if (!r || r.classList.contains('is-visible')) return;
+      r.style.transition = 'none';
+      r.classList.add('is-visible');
+      void r.offsetWidth;
+      r.style.transition = '';
+    });
+  };
+  // Jump links: show the target straight away, so it isn't still sliding up (24px) when the scroll lands
+  document.addEventListener('click', (e) => {
+    const a = e.target.closest('a[href^="#"]');
+    const el = a && a.getAttribute('href').length > 1 && document.getElementById(a.getAttribute('href').slice(1));
+    if (el) showNow(el);
+  }, true);
+
   /* ---------- Active nav link ---------- */
   // top-level links only (not the treatments inside the Services dropdown)
   const links = [...document.querySelectorAll('.nav__links > a, .nav__dd-trigger')];
@@ -58,27 +84,28 @@
   const sizeUnderlines = () => {
     const box = navLinks.getBoundingClientRect();
     const w = navLinks.scrollWidth;
+    if (!w) return;
+    // Rects are on-screen px; CSS zoom (desktop 80%) means layout px = screen px / zoom
+    const z = box.width / navLinks.offsetWidth || 1;
     navLinks.style.setProperty('--nav-w', `${w}px`);
-    links.forEach((a) => a.style.setProperty('--x', `${a.getBoundingClientRect().left - box.left}px`));
-    // Dropdown accents use the same slice of the gradient as the Services underline
-    const trig = document.querySelector('.nav__dd-trigger');
-    if (trig && w) {
+    links.forEach((a) => a.style.setProperty('--x', `${(a.getBoundingClientRect().left - box.left) / z}px`));
+    // Each dropdown's accents use the same slice of the gradient as its trigger's underline
+    document.querySelectorAll('.nav__dd-trigger').forEach((trig) => {
       const r = trig.getBoundingClientRect();
       const dd = trig.parentElement;
-      dd.style.setProperty('--dd-from', gradAt((r.left - box.left) / w));
-      dd.style.setProperty('--dd-to', gradAt((r.right - box.left) / w));
-    }
+      dd.style.setProperty('--dd-from', gradAt((r.left - box.left) / z / w));
+      dd.style.setProperty('--dd-to', gradAt((r.right - box.left) / z / w));
+    });
   };
 
-  // Services dropdown: close it once a treatment is picked, until the pointer leaves the menu
-  const dropdown = document.querySelector('.nav__dropdown');
-  if (dropdown) {
+  // Dropdowns (Services, More): close once an item is picked, until the pointer leaves the menu
+  document.querySelectorAll('.nav__dropdown').forEach((dropdown) => {
     dropdown.querySelectorAll('.nav__menu a').forEach((a) => a.addEventListener('click', () => {
       dropdown.classList.add('is-closed');
       a.blur();
     }));
     dropdown.addEventListener('mouseleave', () => dropdown.classList.remove('is-closed'));
-  }
+  });
   sizeUnderlines();
   window.addEventListener('resize', sizeUnderlines);
   if (document.fonts) document.fonts.ready.then(sizeUnderlines);
@@ -149,7 +176,7 @@
     [prev, next].forEach((btn) => btn.addEventListener('click', () => {
       const card = track.querySelector('.review');
       const gap = parseFloat(getComputedStyle(track).columnGap) || 0;
-      const step = card ? card.getBoundingClientRect().width + gap : track.clientWidth;
+      const step = card ? card.offsetWidth + gap : track.clientWidth;   // layout px, unaffected by CSS zoom
       track.scrollBy({ left: step * Number(btn.dataset.dir), behavior: reduceMotion ? 'auto' : 'smooth' });
     }));
     track.addEventListener('scroll', update, { passive: true });
@@ -161,6 +188,60 @@
   const ripples = document.querySelector('.ripples');
   if (ripples && 'IntersectionObserver' in window) {
     new IntersectionObserver(([e]) => ripples.classList.toggle('is-paused', !e.isIntersecting)).observe(ripples);
+  }
+
+  /* ---------- More from Mayflower: all closed to start, at most one open ---------- */
+  const tiles = [...document.querySelectorAll('.more__tile')];
+  const moreSection = document.getElementById('more');
+  const openMore = (id) => {   // id = panel to open, or null to close them all
+    tiles.forEach((t) => {
+      const on = t.getAttribute('aria-controls') === id;
+      t.setAttribute('aria-expanded', String(on));
+      document.getElementById(t.getAttribute('aria-controls')).hidden = !on;
+    });
+    // background art follows the open panel
+    if (id) moreSection.dataset.open = id; else delete moreSection.dataset.open;
+  };
+  tiles.forEach((t) => t.addEventListener('click', () => {
+    const id = t.getAttribute('aria-controls');
+    if (t.getAttribute('aria-expanded') === 'true') { openMore(null); return; }   // click again to close
+    openMore(id);
+    // on phones the panel opens under its tile: keep the tile at the top of the screen
+    if (window.innerWidth < 1024) t.scrollIntoView({ block: 'start', behavior: reduceMotion ? 'auto' : 'smooth' });
+  }));
+  // Links to a panel (top-bar "More" menu, mobile menu): open it, then scroll to its tile
+  const panelIds = tiles.map((t) => t.getAttribute('aria-controls'));
+  const goToPanel = (id, smooth = true) => {
+    openMore(id);
+    const tile = tiles.find((t) => t.getAttribute('aria-controls') === id);
+    const grid = document.querySelector('.more__grid');
+    showNow(grid);   // no slide-in while scrolling to it
+    const target = window.innerWidth < 1024 ? tile : grid;
+    requestAnimationFrame(() => target.scrollIntoView({ block: 'start', behavior: smooth && !reduceMotion ? 'smooth' : 'auto' }));
+  };
+  document.addEventListener('click', (e) => {
+    const a = e.target.closest('a[href^="#"]');
+    if (!a || !panelIds.includes(a.getAttribute('href').slice(1))) return;
+    e.preventDefault();
+    goToPanel(a.getAttribute('href').slice(1));
+    history.replaceState(null, '', a.getAttribute('href'));
+  });
+  if (panelIds.includes(location.hash.slice(1))) goToPanel(location.hash.slice(1), false);
+
+  /* ---------- Where & When route line: run from the tower to the last flag ---------- */
+  const route = document.querySelector('.route');
+  if (route) {
+    const icons = route.querySelectorAll('.route__tower, .route__flag');
+    const fitRoute = () => {
+      const box = route.getBoundingClientRect();
+      const z = box.height / route.offsetHeight || 1;   // CSS zoom on desktop
+      const mid = (el) => { const r = el.getBoundingClientRect(); return (r.top + r.height / 2 - box.top) / z; };
+      route.style.setProperty('--route-top', `${mid(icons[0])}px`);
+      route.style.setProperty('--route-bottom', `${route.offsetHeight - mid(icons[icons.length - 1])}px`);
+    };
+    fitRoute();
+    window.addEventListener('resize', fitRoute);
+    if (document.fonts) document.fonts.ready.then(fitRoute);
   }
 
   /* ---------- Opening hours: highlight today ---------- */
